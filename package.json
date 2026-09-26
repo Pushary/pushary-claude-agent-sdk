@@ -1,0 +1,74 @@
+{
+  "name": "@pushary/claude-agent-sdk",
+  "version": "0.1.0",
+  "description": "Phone approvals for Claude Agent SDK agents. Your agent asks, your user taps Approve or Deny.",
+  "author": "Pushary <business@pushary.com>",
+  "homepage": "https://pushary.com/human-in-the-loop-claude-agent-sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pushary/pushary-claude-agent-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Pushary/pushary-claude-agent-sdk/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build && npm run typecheck"
+  },
+  "dependencies": {
+    "@pushary/server": "^2.2.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pushary",
+    "claude-agent-sdk",
+    "claude",
+    "anthropic",
+    "can-use-tool",
+    "human-in-the-loop",
+    "approval",
+    "tool-approval",
+    "agent",
+    "llm"
+  ]
+}
