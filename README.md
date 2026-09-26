@@ -53,7 +53,8 @@ their phone once.
 ## Who answers
 
 `externalId` is your own id for the user. Pass a string to bind every call to one
-person, or a function to pick one per call:
+person, or a function to pick one per call. The function also runs for
+`AskUserQuestion`:
 
 ```ts
 pusharyCanUseTool({ externalId: (toolUse) => ownerOf(toolUse.toolName) })
@@ -61,6 +62,20 @@ pusharyCanUseTool({ externalId: (toolUse) => ownerOf(toolUse.toolName) })
 
 Never take the person from the tool input. The model writes the tool input, so a
 prompt injection could send the approval to someone else.
+
+## Clarifying questions
+
+When Claude calls `AskUserQuestion`, the same `canUseTool` puts each question on the
+person's phone as a choice between Claude's options, with each option's description,
+one question at a time, and returns their picks as the answers. Each question waits up
+to `timeoutMs`. If a question goes unanswered, the call is denied and Claude is told
+not to assume an answer.
+
+The phone takes one choice per question, so a multi-select question says "(choose
+one)" and comes back with the one option the person picked. Your rules are not asked
+about questions, including a rule that names `AskUserQuestion`, because a question is
+not an action. A question too long for the phone is denied, and Claude is told to ask
+it in plain text instead.
 
 ## Your rules answer first
 
@@ -74,9 +89,9 @@ person. Set `policy: false` to always ask a person.
 | Option | What it does |
 |---|---|
 | `externalId` | The person who answers. Required. |
-| `question` | Builds the text the person sees. Defaults to the tool name and its input. |
+| `question` | Builds the approval text the person sees. Defaults to the tool name and its input. Not used for `AskUserQuestion`. |
 | `sessionId` | Groups one session's calls, so a replayed turn does not ask twice. |
-| `timeoutMs` | How long to wait for an answer before denying. |
+| `timeoutMs` | How long to wait for an answer before denying. Applies to each clarifying question in turn. |
 | `expiresInSeconds` | How long the question stays answerable. |
 | `requireReachable` | Deny at once when the person has no connected phone. |
 | `policy` | Ask your rules first. Defaults to `true`. |

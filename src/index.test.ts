@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CANCELLED_BEFORE_ANSWER, pusharyCanUseTool } from './index'
+import {
+  CANCELLED_BEFORE_ANSWER,
+  QUESTION_UNANSWERED,
+  QUESTION_UNREADABLE,
+  pusharyCanUseTool,
+} from './index'
 
 type Responder = () => unknown
 
@@ -60,6 +65,14 @@ const answered = (value: string) => () => ({
   answered: true,
   value,
   type: 'confirm',
+})
+
+const chosen = (value: string) => () => ({
+  decisionId: 'd1',
+  status: 'answered',
+  answered: true,
+  value,
+  type: 'select',
 })
 
 const unanswered = () => ({
@@ -171,5 +184,154 @@ describe('pusharyCanUseTool', () => {
     installFetch([answered('yes')])
     const gate = pusharyCanUseTool({ ...CONFIG, externalId: () => undefined })
     await expect(gate('Bash', INPUT, options('toolu_1'))).rejects.toThrow()
+  })
+})
+
+const CLARIFYING = {
+  questions: [
+    {
+      question: 'How should I format the output?',
+      header: 'Format',
+      options: [
+        { label: 'Summary', description: 'Brief overview' },
+        { label: 'Detailed', description: 'Full explanation' },
+      ],
+      multiSelect: false,
+    },
+    {
+      question: 'Which sections should I include?',
+      header: 'Sections',
+      options: [
+        { label: 'Introduction', description: 'Opening context' },
+        { label: 'Conclusion', description: 'Final summary' },
+      ],
+      multiSelect: true,
+    },
+  ],
+}
+
+describe('pusharyCanUseTool with AskUserQuestion', () => {
+  it('asks each question as a choice on the phone and returns the answers keyed by question', async () => {
+    const calls = installFetch([chosen('Summary'), chosen('Conclusion')])
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(result).toEqual({
+      behavior: 'allow',
+      updatedInput: {
+        ...CLARIFYING,
+        answers: {
+          'How should I format the output?': 'Summary',
+          'Which sections should I include?': 'Conclusion',
+        },
+      },
+    })
+    const asks = decisionCalls(calls)
+    expect(asks).toHaveLength(2)
+    expect(asks[0].body).toMatchObject({
+      question: 'How should I format the output?',
+      type: 'select',
+      options: ['Summary', 'Detailed'],
+      context: 'Summary: Brief overview\nDetailed: Full explanation',
+      externalId: 'user_1',
+    })
+    expect(asks[0].body?.idempotencyKey).not.toBe(asks[1].body?.idempotencyKey)
+  })
+
+  it('tells the person a multi-select question takes one choice, and keys the answer by the original text', async () => {
+    const calls = installFetch([chosen('Summary'), chosen('Conclusion')])
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(decisionCalls(calls)[1].body?.question).toBe('Which sections should I include? (choose one)')
+    expect(result.behavior === 'allow' && result.updatedInput.answers).toEqual({
+      'How should I format the output?': 'Summary',
+      'Which sections should I include?': 'Conclusion',
+    })
+  })
+
+  it('asks the same decisions again when the SDK replays the same call', async () => {
+    const calls = installFetch([chosen('Summary')])
+    const gate = pusharyCanUseTool(CONFIG)
+    await gate('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    await gate('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    const keys = decisionCalls(calls).map((call) => call.body?.idempotencyKey)
+    expect(keys).toHaveLength(4)
+    expect(keys.slice(2)).toEqual(keys.slice(0, 2))
+  })
+
+  it('asks no further question once the run is cancelled between questions', async () => {
+    const controller = new AbortController()
+    const posted: string[] = []
+    globalThis.fetch = (async (_input: unknown, init?: { body?: string }) => {
+      const body = init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : {}
+      posted.push(String(body.question))
+      controller.abort()
+      return { ok: true, status: 200, json: async () => chosen('Summary')() } as Response
+    }) as typeof fetch
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, {
+      signal: controller.signal,
+      toolUseID: 'toolu_q',
+    })
+    expect(result).toEqual({ behavior: 'deny', message: CANCELLED_BEFORE_ANSWER })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(posted).toEqual(['How should I format the output?'])
+  })
+
+  it('sends a tool an MCP server named AskUserQuestion through the approval gate', async () => {
+    const calls = installFetch([answered('yes')])
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, {
+      ...options('toolu_q'),
+      mcpServer: { name: 'other', source: 'user' },
+    })
+    expect(result).toEqual({ behavior: 'allow', updatedInput: CLARIFYING })
+    expect(calls.some((call) => call.url.endsWith('/authorize'))).toBe(true)
+    expect(decisionCalls(calls)[0].body).toMatchObject({ type: 'confirm' })
+  })
+
+  it('never asks the site rules, because a question is not an action', async () => {
+    const calls = installFetch([chosen('Summary'), chosen('Conclusion')], DENIED)
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(result.behavior).toBe('allow')
+    expect(calls.some((call) => call.url.endsWith('/authorize'))).toBe(false)
+  })
+
+  it('denies and stops asking when a question goes unanswered', async () => {
+    const calls = installFetch([unanswered])
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(result).toEqual({ behavior: 'deny', message: QUESTION_UNANSWERED })
+    expect(decisionCalls(calls)).toHaveLength(1)
+  })
+
+  it('denies without asking anyone when the questions cannot be read', async () => {
+    const calls = installFetch([chosen('Summary')])
+    const gate = pusharyCanUseTool(CONFIG)
+    const twoOptions = [{ label: 'A' }, { label: 'B' }]
+    const unreadable = [
+      {},
+      { questions: [] },
+      { questions: 'Pick one?' },
+      { questions: [{ question: 'Pick one?', options: [] }] },
+      { questions: [{ question: 'Pick one?', options: [{ label: 'Only' }] }] },
+      { questions: [{ question: 'Pick one?', options: [{ label: '  ' }, { label: 'B' }] }] },
+      { questions: [{ question: 'Pick one?', options: [{ label: 'x'.repeat(201) }, { label: 'B' }] }] },
+      { questions: [{ question: 'Pick one?', options: 'A, B' }] },
+      { questions: [{ question: 'x'.repeat(501), options: twoOptions }] },
+      { questions: [{ question: 'x'.repeat(490), options: twoOptions, multiSelect: true }] },
+    ]
+    for (const input of unreadable) {
+      expect(await gate('AskUserQuestion', input, options('toolu_q'))).toEqual({
+        behavior: 'deny',
+        message: QUESTION_UNREADABLE,
+      })
+    }
+    expect(calls).toHaveLength(0)
+  })
+
+  it('stops waiting and denies when the run is cancelled mid-question', async () => {
+    globalThis.fetch = (() => new Promise<Response>(() => undefined)) as typeof fetch
+    const controller = new AbortController()
+    const pending = pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, {
+      signal: controller.signal,
+      toolUseID: 'toolu_q',
+    })
+    controller.abort()
+    await expect(pending).resolves.toEqual({ behavior: 'deny', message: CANCELLED_BEFORE_ANSWER })
   })
 })

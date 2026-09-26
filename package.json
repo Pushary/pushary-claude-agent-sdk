@@ -1,6 +1,6 @@
 {
   "name": "@pushary/claude-agent-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Phone approvals for Claude Agent SDK agents. Your agent asks, your user taps Approve or Deny.",
   "author": "Pushary <business@pushary.com>",
   "homepage": "https://pushary.com/human-in-the-loop-claude-agent-sdk",
@@ -36,6 +36,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "conformance": "tsc -p tsconfig.conformance.json",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build && npm run typecheck"
   },

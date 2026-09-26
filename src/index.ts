@@ -1,9 +1,21 @@
 import {
   createAdapterKernel,
+  decisionFingerprint,
   renderApprovalQuestion,
   type ApprovalDecision,
   type PusharyGateConfig,
 } from '@pushary/server/adapters'
+import {
+  ASK_USER_QUESTION,
+  QUESTION_UNANSWERED,
+  QUESTION_UNREADABLE,
+  clarifyingQuestionsOf,
+  collectAnswers,
+  phoneQuestionOf,
+  type AskClarifyingQuestion,
+} from './clarifying-questions'
+
+export { ASK_USER_QUESTION, QUESTION_UNANSWERED, QUESTION_UNREADABLE } from './clarifying-questions'
 
 export interface GatedToolUse {
   readonly toolName: string
@@ -22,6 +34,7 @@ export interface PusharyCanUseToolConfig extends PusharyGateConfig {
 export interface CanUseToolOptions {
   readonly signal: AbortSignal
   readonly toolUseID?: string
+  readonly mcpServer?: { readonly name: string; readonly source: string }
 }
 
 export type PusharyPermissionResult =
@@ -59,8 +72,50 @@ const denyOnCancel = (
     const onAbort = () => resolve(CANCELLED)
     signal.addEventListener('abort', onAbort, { once: true })
     stopListening = () => signal.removeEventListener('abort', onAbort)
+    if (signal.aborted) onAbort()
   })
   return Promise.race([permission, cancelled]).finally(stopListening)
+}
+
+const askOnPhone =
+  (config: PusharyCanUseToolConfig, toolUse: GatedToolUse, externalId: string): AskClarifyingQuestion =>
+  async (clarifying, index) => {
+    const phone = phoneQuestionOf(clarifying)
+    const result = await kernel.askExternalUser(config, {
+      question: phone.text,
+      type: 'select',
+      options: phone.options,
+      context: phone.context,
+      externalId,
+      toolName: ASK_USER_QUESTION,
+      idempotencyKey: decisionFingerprint({
+        sessionId: config.sessionId ?? '',
+        callId: toolUse.toolUseID,
+        externalId,
+        index,
+        question: clarifying.question,
+      }),
+      expiresInSeconds: config.expiresInSeconds,
+      requireReachable: config.requireReachable,
+    })
+    return result.answered && result.value ? result.value : null
+  }
+
+const isClarifyingQuestionCall = (toolName: string, options: CanUseToolOptions): boolean =>
+  toolName === ASK_USER_QUESTION && options.mcpServer === undefined
+
+const answerClarifyingQuestions = async (
+  config: PusharyCanUseToolConfig,
+  toolUse: GatedToolUse,
+  externalId: string,
+  signal: AbortSignal,
+): Promise<PusharyPermissionResult> => {
+  const questions = clarifyingQuestionsOf(toolUse.input)
+  if (!questions) return { behavior: 'deny', message: QUESTION_UNREADABLE }
+  const answers = await collectAnswers(questions, askOnPhone(config, toolUse, externalId), signal)
+  return answers
+    ? { behavior: 'allow', updatedInput: { ...toolUse.input, answers } }
+    : { behavior: 'deny', message: QUESTION_UNANSWERED }
 }
 
 export const pusharyCanUseTool = (config: PusharyCanUseToolConfig): PusharyCanUseTool => {
@@ -71,14 +126,18 @@ export const pusharyCanUseTool = (config: PusharyCanUseToolConfig): PusharyCanUs
     if (options.signal.aborted) return CANCELLED
     const toolUse: GatedToolUse = { toolName, input, toolUseID: toolUseIdOf(options) }
     const configured = typeof config.externalId === 'function' ? config.externalId(toolUse) : config.externalId
-    const permission = gate({
-      toolName,
-      callId: toolUse.toolUseID,
-      sessionId: config.sessionId ?? '',
-      question: buildQuestion(toolUse),
-      externalId: kernel.requireExternalId(configured),
-      input,
-    }).then(permissionFor(input))
+    const externalId = kernel.requireExternalId(configured)
+    const permission =
+      isClarifyingQuestionCall(toolName, options)
+        ? answerClarifyingQuestions(config, toolUse, externalId, options.signal)
+        : gate({
+            toolName,
+            callId: toolUse.toolUseID,
+            sessionId: config.sessionId ?? '',
+            question: buildQuestion(toolUse),
+            externalId,
+            input,
+          }).then(permissionFor(input))
     return denyOnCancel(permission, options.signal)
   }
 }
