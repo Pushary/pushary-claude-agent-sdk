@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto'
+import { createPusharyServer } from '@pushary/server'
 import {
   createAdapterKernel,
   decisionFingerprint,
   renderApprovalQuestion,
   type ApprovalDecision,
+  type AskResult,
   type PusharyGateConfig,
 } from '@pushary/server/adapters'
 import {
@@ -27,6 +30,8 @@ export type ToolUseResolver<TValue> = (toolUse: GatedToolUse) => TValue
 
 export interface PusharyCanUseToolConfig extends PusharyGateConfig {
   readonly externalId: string | ToolUseResolver<string | undefined>
+  /** Ask the site's rules before a person. Defaults to false. */
+  readonly policy?: boolean
   readonly question?: ToolUseResolver<string>
   readonly sessionId?: string
 }
@@ -39,7 +44,7 @@ export interface CanUseToolOptions {
 
 export type PusharyPermissionResult =
   | { readonly behavior: 'allow'; readonly updatedInput: Record<string, unknown> }
-  | { readonly behavior: 'deny'; readonly message: string }
+  | { readonly behavior: 'deny'; readonly message: string; readonly interrupt?: boolean }
 
 export type PusharyCanUseTool = (
   toolName: string,
@@ -49,14 +54,49 @@ export type PusharyCanUseTool = (
 
 export const CANCELLED_BEFORE_ANSWER = 'The run was cancelled before anyone answered. Do not retry the same action.'
 
+export const PERSON_UNREACHABLE = 'Pushary could not reach a person to decide, so this was denied. Do not retry the same action.'
+
+export const AGENT_STOPPED = 'This agent was stopped in Pushary, so nobody was asked. Stop what you are doing and end your turn.'
+
 const kernel = createAdapterKernel('pusharyCanUseTool()')
 
 const defaultQuestion = (toolUse: GatedToolUse): string =>
   renderApprovalQuestion(toolUse.toolName, toolUse.input)
 
+const SITE_STOPPED_STATUS = 'stopped'
+
 const CANCELLED: PusharyPermissionResult = { behavior: 'deny', message: CANCELLED_BEFORE_ANSWER }
 
-const toolUseIdOf = (options: CanUseToolOptions): string => options.toolUseID ?? crypto.randomUUID()
+const UNREACHABLE: PusharyPermissionResult = { behavior: 'deny', message: PERSON_UNREACHABLE }
+
+const STOPPED: PusharyPermissionResult = { behavior: 'deny', message: AGENT_STOPPED, interrupt: true }
+
+const denyUnreachable = (error: unknown): PusharyPermissionResult => {
+  console.warn('Pushary: denied because the request failed:', error)
+  return UNREACHABLE
+}
+
+const toolUseIdOf = (options: CanUseToolOptions): string => options.toolUseID ?? randomUUID()
+
+const isSiteStopped = (result: { readonly status: string }): boolean => result.status === SITE_STOPPED_STATUS
+
+const WITHDRAW_TIMEOUT_MS = 5_000
+
+const withdrawalClient = (config: PusharyCanUseToolConfig) =>
+  createPusharyServer({
+    apiKey: config.apiKey ?? process.env.PUSHARY_API_KEY ?? '',
+    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    requestTimeoutMs: WITHDRAW_TIMEOUT_MS,
+  })
+
+const withdrawUnanswered = async (config: PusharyCanUseToolConfig, result: AskResult): Promise<void> => {
+  if (result.status !== 'pending') return
+  try {
+    await withdrawalClient(config).decisions.cancel(result.decisionId)
+  } catch (error) {
+    console.warn('Pushary: an unanswered question could not be taken off the phone:', error)
+  }
+}
 
 const permissionFor =
   (input: Record<string, unknown>) =>
@@ -98,7 +138,9 @@ const askOnPhone =
       expiresInSeconds: config.expiresInSeconds,
       requireReachable: config.requireReachable,
     })
-    return result.answered && result.value ? result.value : null
+    if (result.answered && result.value) return { answered: true, value: result.value }
+    await withdrawUnanswered(config, result)
+    return { answered: false, stopped: isSiteStopped(result) }
   }
 
 const isClarifyingQuestionCall = (toolName: string, options: CanUseToolOptions): boolean =>
@@ -112,14 +154,13 @@ const answerClarifyingQuestions = async (
 ): Promise<PusharyPermissionResult> => {
   const questions = clarifyingQuestionsOf(toolUse.input)
   if (!questions) return { behavior: 'deny', message: QUESTION_UNREADABLE }
-  const answers = await collectAnswers(questions, askOnPhone(config, toolUse, externalId), signal)
-  return answers
-    ? { behavior: 'allow', updatedInput: { ...toolUse.input, answers } }
-    : { behavior: 'deny', message: QUESTION_UNANSWERED }
+  const collected = await collectAnswers(questions, askOnPhone(config, toolUse, externalId), signal)
+  if (collected.answered) return { behavior: 'allow', updatedInput: { ...toolUse.input, answers: collected.answers } }
+  return collected.stopped ? STOPPED : { behavior: 'deny', message: QUESTION_UNANSWERED }
 }
 
 export const pusharyCanUseTool = (config: PusharyCanUseToolConfig): PusharyCanUseTool => {
-  const gate = kernel.createGate(config)
+  const gate = kernel.createGate({ ...config, policy: config.policy ?? false })
   const buildQuestion = config.question ?? defaultQuestion
 
   return async (toolName, input, options) => {
@@ -138,7 +179,7 @@ export const pusharyCanUseTool = (config: PusharyCanUseToolConfig): PusharyCanUs
             externalId,
             input,
           }).then(permissionFor(input))
-    return denyOnCancel(permission, options.signal)
+    return denyOnCancel(permission.catch(denyUnreachable), options.signal)
   }
 }
 

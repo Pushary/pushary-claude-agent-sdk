@@ -1,6 +1,6 @@
 {
   "name": "@pushary/claude-agent-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Phone approvals for Claude Agent SDK agents. Your agent asks, your user taps Approve or Deny.",
   "author": "Pushary <business@pushary.com>",
   "homepage": "https://pushary.com/human-in-the-loop-claude-agent-sdk",

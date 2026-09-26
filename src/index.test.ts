@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  AGENT_STOPPED,
   CANCELLED_BEFORE_ANSWER,
+  PERSON_UNREACHABLE,
   QUESTION_UNANSWERED,
   QUESTION_UNREADABLE,
   pusharyCanUseTool,
@@ -9,6 +11,7 @@ import {
 type Responder = () => unknown
 
 interface RecordedCall {
+  readonly method: string | undefined
   readonly url: string
   readonly body: Record<string, unknown> | undefined
 }
@@ -38,15 +41,16 @@ const realFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = realFetch
+  vi.unstubAllGlobals()
 })
 
 function installFetch(decisions: readonly Responder[], evaluation: unknown = REQUIRES_HUMAN): RecordedCall[] {
   const calls: RecordedCall[] = []
   let index = 0
-  globalThis.fetch = (async (input: unknown, init?: { body?: string }) => {
+  globalThis.fetch = (async (input: unknown, init?: { method?: string; body?: string }) => {
     const url = String(input)
     const body = init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : undefined
-    calls.push({ url, body })
+    calls.push({ method: init?.method, url, body })
     if (url.endsWith('/authorize')) {
       return { ok: true, status: 200, json: async () => evaluation } as Response
     }
@@ -57,7 +61,10 @@ function installFetch(decisions: readonly Responder[], evaluation: unknown = REQ
   return calls
 }
 
-const decisionCalls = (calls: readonly RecordedCall[]) => calls.filter((call) => !call.url.endsWith('/authorize'))
+const decisionCalls = (calls: readonly RecordedCall[]) => calls.filter((call) => call.url.endsWith('/decisions'))
+
+const withdrawals = (calls: readonly RecordedCall[]) =>
+  calls.filter((call) => call.method === 'DELETE').map((call) => call.url)
 
 const answered = (value: string) => () => ({
   decisionId: 'd1',
@@ -81,6 +88,14 @@ const unanswered = () => ({
   answered: false,
   value: null,
   type: 'confirm',
+})
+
+const stopped = () => ({
+  decisionId: 'd_stop',
+  status: 'stopped',
+  answered: false,
+  type: 'select',
+  handoffAction: 'stop',
 })
 
 const CONFIG = {
@@ -128,16 +143,24 @@ describe('pusharyCanUseTool', () => {
     expect(decisionCalls(calls)[0].body).toMatchObject({ externalId: 'owner_of_Bash' })
   })
 
-  it('allows without paging anyone when a rule allows the call', async () => {
+  it('never asks the site rules unless policy is turned on, so a coding-agent rule cannot answer', async () => {
     const calls = installFetch([answered('no')], ALLOWED)
     const result = await pusharyCanUseTool(CONFIG)('Bash', INPUT, options('toolu_1'))
+    expect(result).toMatchObject({ behavior: 'deny' })
+    expect(calls.some((call) => call.url.endsWith('/authorize'))).toBe(false)
+    expect(decisionCalls(calls)).toHaveLength(1)
+  })
+
+  it('allows without paging anyone when policy is on and a rule allows the call', async () => {
+    const calls = installFetch([answered('no')], ALLOWED)
+    const result = await pusharyCanUseTool({ ...CONFIG, policy: true })('Bash', INPUT, options('toolu_1'))
     expect(result).toEqual({ behavior: 'allow', updatedInput: INPUT })
     expect(decisionCalls(calls)).toHaveLength(0)
   })
 
-  it('denies without paging anyone when a rule denies the call', async () => {
+  it('denies without paging anyone when policy is on and a rule denies the call', async () => {
     const calls = installFetch([answered('yes')], DENIED)
-    const result = await pusharyCanUseTool(CONFIG)('Bash', INPUT, options('toolu_1'))
+    const result = await pusharyCanUseTool({ ...CONFIG, policy: true })('Bash', INPUT, options('toolu_1'))
     expect(result).toMatchObject({ behavior: 'deny' })
     expect(result.behavior === 'deny' && result.message).toContain('Denied by policy rule Bash.')
     expect(decisionCalls(calls)).toHaveLength(0)
@@ -178,6 +201,13 @@ describe('pusharyCanUseTool', () => {
     await gate('Bash', INPUT, options())
     const [first, second] = decisionCalls(calls)
     expect(first.body?.idempotencyKey).not.toBe(second.body?.idempotencyKey)
+  })
+
+  it('opens a decision without a tool use id on a runtime with no global crypto', async () => {
+    installFetch([answered('yes')])
+    vi.stubGlobal('crypto', undefined)
+    const result = await pusharyCanUseTool(CONFIG)('Bash', INPUT, options())
+    expect(result).toEqual({ behavior: 'allow', updatedInput: INPUT })
   })
 
   it('refuses to ask when there is nobody to ask', async () => {
@@ -276,7 +306,7 @@ describe('pusharyCanUseTool with AskUserQuestion', () => {
 
   it('sends a tool an MCP server named AskUserQuestion through the approval gate', async () => {
     const calls = installFetch([answered('yes')])
-    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, {
+    const result = await pusharyCanUseTool({ ...CONFIG, policy: true })('AskUserQuestion', CLARIFYING, {
       ...options('toolu_q'),
       mcpServer: { name: 'other', source: 'user' },
     })
@@ -287,7 +317,7 @@ describe('pusharyCanUseTool with AskUserQuestion', () => {
 
   it('never asks the site rules, because a question is not an action', async () => {
     const calls = installFetch([chosen('Summary'), chosen('Conclusion')], DENIED)
-    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    const result = await pusharyCanUseTool({ ...CONFIG, policy: true })('AskUserQuestion', CLARIFYING, options('toolu_q'))
     expect(result.behavior).toBe('allow')
     expect(calls.some((call) => call.url.endsWith('/authorize'))).toBe(false)
   })
@@ -297,6 +327,55 @@ describe('pusharyCanUseTool with AskUserQuestion', () => {
     const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
     expect(result).toEqual({ behavior: 'deny', message: QUESTION_UNANSWERED })
     expect(decisionCalls(calls)).toHaveLength(1)
+  })
+
+  it('takes an unanswered question back off the phone', async () => {
+    const calls = installFetch([unanswered])
+    await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(withdrawals(calls)).toEqual(['https://pushary.com/api/v1/server/decisions/d1'])
+  })
+
+  it('leaves an answered question where it is', async () => {
+    const calls = installFetch([chosen('Summary'), chosen('Conclusion')])
+    await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(withdrawals(calls)).toEqual([])
+  })
+
+  it('finishes taking the question back before it denies', async () => {
+    let withdrawn = false
+    globalThis.fetch = (async (_input: unknown, init?: { method?: string }) => {
+      if (init?.method === 'DELETE') {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        withdrawn = true
+        return { ok: true, status: 200, json: async () => ({ cancelled: true }) } as Response
+      }
+      return { ok: true, status: 200, json: async () => unanswered() } as Response
+    }) as typeof fetch
+    await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(withdrawn).toBe(true)
+  })
+
+  it('denies the same way when taking the question back fails, and says so', async () => {
+    const methods: (string | undefined)[] = []
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    globalThis.fetch = (async (_input: unknown, init?: { method?: string }) => {
+      methods.push(init?.method)
+      if (init?.method === 'DELETE') throw new TypeError('fetch failed')
+      return { ok: true, status: 200, json: async () => unanswered() } as Response
+    }) as typeof fetch
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(result).toEqual({ behavior: 'deny', message: QUESTION_UNANSWERED })
+    expect(methods).toEqual(['POST', 'DELETE'])
+    expect(warned).toHaveBeenCalledTimes(1)
+    warned.mockRestore()
+  })
+
+  it('ends the turn instead of reporting no answer when the agent was stopped in Pushary', async () => {
+    const calls = installFetch([stopped])
+    const result = await pusharyCanUseTool(CONFIG)('AskUserQuestion', CLARIFYING, options('toolu_q'))
+    expect(result).toEqual({ behavior: 'deny', message: AGENT_STOPPED, interrupt: true })
+    expect(decisionCalls(calls)).toHaveLength(1)
+    expect(withdrawals(calls)).toEqual([])
   })
 
   it('denies without asking anyone when the questions cannot be read', async () => {
@@ -333,5 +412,25 @@ describe('pusharyCanUseTool with AskUserQuestion', () => {
     })
     controller.abort()
     await expect(pending).resolves.toEqual({ behavior: 'deny', message: CANCELLED_BEFORE_ANSWER })
+  })
+})
+
+const refuseEveryRequest = (failure: number | 'network'): void => {
+  globalThis.fetch = (async () => {
+    if (failure === 'network') throw new TypeError('fetch failed')
+    return { ok: false, status: failure, statusText: '', json: async () => ({ error: 'refused', code: 'refused' }) } as Response
+  }) as typeof fetch
+}
+
+describe('pusharyCanUseTool when Pushary refuses the ask', () => {
+  it.each([409, 403, 429, 503, 'network'] as const)('denies an approval and a question instead of throwing, and says why (%s)', async (failure) => {
+    refuseEveryRequest(failure)
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const gate = pusharyCanUseTool({ ...CONFIG, requireReachable: true })
+    const unreachable = { behavior: 'deny', message: PERSON_UNREACHABLE }
+    await expect(gate('Bash', INPUT, options('toolu_1'))).resolves.toEqual(unreachable)
+    await expect(gate('AskUserQuestion', CLARIFYING, options('toolu_q'))).resolves.toEqual(unreachable)
+    expect(warned).toHaveBeenCalledTimes(2)
+    warned.mockRestore()
   })
 })

@@ -68,8 +68,10 @@ prompt injection could send the approval to someone else.
 When Claude calls `AskUserQuestion`, the same `canUseTool` puts each question on the
 person's phone as a choice between Claude's options, with each option's description,
 one question at a time, and returns their picks as the answers. Each question waits up
-to `timeoutMs`. If a question goes unanswered, the call is denied and Claude is told
-not to assume an answer.
+to `timeoutMs`. If a question goes unanswered, it is taken off the phone before the call
+is denied, and Claude is told not to assume an answer. If Pushary cannot take it back
+within five seconds, the reason goes to `console.warn` and the question expires on its
+own.
 
 The phone takes one choice per question, so a multi-select question says "(choose
 one)" and comes back with the one option the person picked. Your rules are not asked
@@ -77,12 +79,17 @@ about questions, including a rule that names `AskUserQuestion`, because a questi
 not an action. A question too long for the phone is denied, and Claude is told to ask
 it in plain text instead.
 
-## Your rules answer first
+## Site rules are off unless you turn them on
 
-If your site has rules, the gate asks them before it asks a person. A rule can
-allow a call without paging anyone, or deny it outright. Rules need a server key
-from Settings > API keys; with the key from onboarding, every gated call goes to a
-person. Set `policy: false` to always ask a person.
+Claude's tools have the same names in your own Claude Code: `Bash`, `Read`, `Write`,
+`WebFetch`. A rule you wrote for your own Claude Code sessions would also answer your
+users' calls, so by default every gated call goes to a person.
+
+Set `policy: true` to ask your site's rules first. A rule can then allow a call
+without paging anyone, or deny it outright. Only turn it on for a site whose rules
+you wrote for this agent. Rules need a server key from Settings > API keys. With the
+key from onboarding, `policy: true` has no effect and every gated call still goes to a
+person.
 
 ## Options
 
@@ -94,7 +101,7 @@ person. Set `policy: false` to always ask a person.
 | `timeoutMs` | How long to wait for an answer before denying. Applies to each clarifying question in turn. |
 | `expiresInSeconds` | How long the question stays answerable. |
 | `requireReachable` | Deny at once when the person has no connected phone. |
-| `policy` | Ask your rules first. Defaults to `true`. |
+| `policy` | Ask your site's rules before a person. Defaults to `false`. |
 | `agentName` | Shown on the approval so the person knows which agent is asking. |
 | `apiKey` | Defaults to `PUSHARY_API_KEY`. |
 

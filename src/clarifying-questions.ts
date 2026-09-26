@@ -29,7 +29,17 @@ export interface PhoneQuestion {
   readonly context?: string
 }
 
-export type AskClarifyingQuestion = (question: ClarifyingQuestion, index: number) => Promise<string | null>
+export type ClarifyingAnswer =
+  | { readonly answered: true; readonly value: string }
+  | { readonly answered: false; readonly stopped: boolean }
+
+export type CollectedAnswers =
+  | { readonly answered: true; readonly answers: Readonly<Record<string, string>> }
+  | { readonly answered: false; readonly stopped: boolean }
+
+export type AskClarifyingQuestion = (question: ClarifyingQuestion, index: number) => Promise<ClarifyingAnswer>
+
+const NOT_ASKED: CollectedAnswers = { answered: false, stopped: false }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
@@ -81,13 +91,13 @@ export const collectAnswers = async (
   questions: readonly ClarifyingQuestion[],
   ask: AskClarifyingQuestion,
   signal: AbortSignal,
-): Promise<Readonly<Record<string, string>> | null> => {
+): Promise<CollectedAnswers> => {
   const answers: Record<string, string> = {}
   for (const [index, question] of questions.entries()) {
-    if (signal.aborted) return null
+    if (signal.aborted) return NOT_ASKED
     const answer = await ask(question, index)
-    if (answer === null) return null
-    answers[question.question] = answer
+    if (!answer.answered) return answer
+    answers[question.question] = answer.value
   }
-  return answers
+  return { answered: true, answers }
 }
