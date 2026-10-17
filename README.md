@@ -5,7 +5,7 @@ Phone approvals for Claude Agent SDK agents. Your agent asks, your user taps App
 ## What you need
 
 - A Pushary Partner plan, from $99 a month.
-- An API key from [Partner onboarding](https://pushary.com/onboarding/partner).
+- An API key from [Partner onboarding](https://pushary.com/onboarding/partner?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=partner-start).
 - Your users install the free Pushary app ([iPhone](https://apps.apple.com/us/app/pushary/id6785677563), [Android](https://play.google.com/store/apps/details?id=com.pushary.app)) and open your connect link once. They never sign up or pay.
 
 ## Install
