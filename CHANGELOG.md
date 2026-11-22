@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+README: what you get after you sign in, plans, and links to the integration's pages. No code changes.
+
 ## 0.3.0
 
 Your site's rules are no longer asked by default. Claude's tools have the same names in your own Claude Code, so a rule written for your own sessions, such as one that allows `Bash`, also allowed your users' calls without asking anyone, and a deny rule denied them. Every gated call now goes to a person unless you pass `policy: true`.

@@ -4,9 +4,17 @@ Phone approvals for Claude Agent SDK agents. Your agent asks, your user taps App
 
 ## What you need
 
-- A Pushary Partner plan, from $99 a month.
+- A Pushary Partner plan, from $99 a month. [Start the trial](https://pushary.com/sign-up?from=agent&plan=partner&utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=partner-start).
 - An API key from [Partner onboarding](https://pushary.com/onboarding/partner?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=partner-start).
 - Your users install the free Pushary app ([iPhone](https://apps.apple.com/us/app/pushary/id6785677563), [Android](https://play.google.com/store/apps/details?id=com.pushary.app)) and open your connect link once. They never sign up or pay.
+
+## What your customer gets
+
+1. They open your connect link once. It shows your product's name and logo and connects their phone.
+2. When Claude wants a tool that needs permission, a push notification titled with your product name arrives, such as **Acme needs your approval**. Claude's `AskUserQuestion` questions arrive as choices.
+3. They tap Approve or Deny, or pick an answer. Deny, or no answer in time, returns a denial Claude can read, and the tool does not run.
+
+Pushary hosts the phone delivery, the decision record and the [audit log](https://pushary.com/docs/agents/audit-log?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=readme). Your app keeps its own sign-in, the Claude Agent SDK session and the tools it runs.
 
 ## Install
 
@@ -104,6 +112,18 @@ person.
 | `policy` | Ask your site's rules before a person. Defaults to `false`. |
 | `agentName` | Shown on the approval so the person knows which agent is asking. |
 | `apiKey` | Defaults to `PUSHARY_API_KEY`. |
+
+## For your own agents
+
+This package asks your users. For Claude agents you run for yourself, you need no package. One `mcpServers` entry connects the SDK to the hosted Pushary MCP server, and the agent's questions reach your own phone. That works on the Agent, Agent Pro or Team plan. The [adapters guide](https://pushary.com/docs/agents/adapters?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=readme#claude-agent-sdk) has the snippet, and the plans are on the [pricing page](https://pushary.com/pricing?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=readme).
+
+## Links
+
+- [Human in the loop for the Claude Agent SDK](https://pushary.com/human-in-the-loop-claude-agent-sdk?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=readme): what your customer sees, with the full example.
+- [Claude Agent SDK guide](https://pushary.com/docs/agents/build/claude-agent-sdk?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=readme) in the Pushary docs.
+- [Partner plan](https://pushary.com/partners?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=readme), from $99 a month.
+- [Browser demo](https://pushary.com/try?utm_source=github&utm_medium=oss-adapter&utm_campaign=pushary-claude-agent-sdk&utm_content=readme) of one approval.
+- Other adapters: [Codex app-server](https://github.com/Pushary/pushary-codex-app-server), [OpenAI Agents SDK](https://github.com/Pushary/pushary-openai-agents), [Vercel AI SDK](https://github.com/Pushary/pushary-ai-sdk).
 
 ## License
 
